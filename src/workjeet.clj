@@ -22,10 +22,20 @@
         start (.withTimeAtStartOfDay end)]
     (org.joda.time.Duration. start end)))
 
+(defn sum-days [days day]
+  (let [running-sum (.plus (or (-> (last days) :sum) org.joda.time.Duration/ZERO)
+                           (get-duration (get day "Dauer (rel.)")))]
+    (conj days (assoc day :sum running-sum))))
+
 (defn sum-working-hours [week]
-  (let [zero-excel-date (org.joda.time.LocalDateTime/fromDateFields (org.apache.poi.ss.usermodel.DateUtil/getJavaDate 0.0))
-        duration-sum (.toPeriod (reduce #(.plus %1 %2) (map #(get-duration (get % "Dauer (rel.)")) week)))]
-    (.toDate (.plus zero-excel-date duration-sum))))
+  (let [zero-excel-date (org.joda.time.LocalDateTime/fromDateFields
+                         (org.apache.poi.ss.usermodel.DateUtil/getJavaDate 0.0))
+        week-with-sum (reduce sum-days [] week)]
+    (last (map #(assoc {}
+                  :sum (.toPeriod (:sum %))
+                  :kw (get-week-of-year (get % "Datum"))
+                  :end-date (org.joda.time.LocalDate/fromDateFields (get % "Datum")))
+               week-with-sum))))
 
 (defn partition-by-week [timesheet]
   (partition-by
@@ -34,3 +44,4 @@
 
 (defn weekly-working-hours [timesheet]
   (map sum-working-hours (partition-by-week timesheet)))
+
