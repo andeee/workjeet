@@ -1,5 +1,6 @@
 (ns workjeet
-  (:require [dk.ative.docjure.spreadsheet :refer :all]))
+  (:require [dk.ative.docjure.spreadsheet :refer :all]
+            [clojure.string :as str]))
 
 (defn column-range [start-kw end-kw]
   (let [kw-to-int (comp int first seq name)
@@ -7,41 +8,55 @@
         end (kw-to-int end-kw)]
     (map (comp keyword str char) (range start (inc end)))))
 
-(defn read-timesheet [workbook-file]
-  (let [workbook (load-workbook workbook-file)
-        sheet (first (sheet-seq workbook))
-        header-row (first (row-seq sheet))
-        columns (apply array-map (interleave (column-range :A :Z) (map read-cell header-row)))]
-    (rest (select-columns columns sheet))))
+(defn read-timesheet [workbook]
+  (let [sheet (first (sheet-seq workbook))]
+    (rest (row-seq sheet))))
 
-(defn get-week-of-year [date]
-  (.getWeekOfWeekyear (org.joda.time.LocalDate/fromDateFields date)))
+(defn get-day-date [day-row]
+  (org.joda.time.LocalDate/fromDateFields (.getDateCellValue (first day-row))))
 
-(defn get-duration [datetime]
-  (let [end (.toDateTime (org.joda.time.LocalDateTime/fromDateFields datetime))
-        start (.withTimeAtStartOfDay end)]
-    (org.joda.time.Duration. start end)))
+(defn get-day-of-week [day-row]
+  (.getDayOfWeek (get-day-date day-row)))
 
-(defn sum-days [days day]
-  (let [running-sum (.plus (or (-> (last days) :sum) org.joda.time.Duration/ZERO)
-                           (get-duration (get day "Dauer (rel.)")))]
-    (conj days (assoc day :sum running-sum))))
+(defn get-week-of-year [day-row]
+  (.getWeekOfWeekyear (get-day-date day-row)))
 
-(defn sum-working-hours [week]
-  (let [zero-excel-date (org.joda.time.LocalDateTime/fromDateFields
-                         (org.apache.poi.ss.usermodel.DateUtil/getJavaDate 0.0))
-        week-with-sum (reduce sum-days [] week)]
-    (last (map #(assoc {}
-                  :sum (.toPeriod (:sum %))
-                  :kw (get-week-of-year (get % "Datum"))
-                  :end-date (org.joda.time.LocalDate/fromDateFields (get % "Datum")))
-               week-with-sum))))
+(defn select-last-day-of-week [day-rows]
+  (let [last-day (apply max (map get-day-of-week day-rows))]
+    (filter #(= last-day (get-day-of-week %)) day-rows)))
 
 (defn partition-by-week [timesheet]
   (partition-by
-   #(get-week-of-year (get % "Datum"))
+   get-week-of-year
    timesheet))
 
-(defn weekly-working-hours [timesheet]
-  (map sum-working-hours (partition-by-week timesheet)))
+(defn get-last-days-by-week [timesheet]
+  (->> (partition-by-week timesheet)
+   (mapcat select-last-day-of-week)))
 
+(defn calc-row-ranges [row-range-seq last-row]
+  (let [first-row (if (seq row-range-seq) (inc (last row-range-seq)) 1)]
+    (conj row-range-seq first-row last-row)))
+
+(defn get-week-row-ranges [last-days-by-week]
+  (->> (map #(.getRowNum %) last-days-by-week)
+       (reduce calc-row-ranges [])
+       (map inc)
+       (partition 2)))
+
+(defn get-sum-fns [week-row-ranges]
+  (map #(str "SUM" "(D" (str/join ":D" %) ")") week-row-ranges))
+
+(defn set-formula-on-new-cell! [row formula]
+  (let [new-cell (.createCell row (.getLastCellNum row))]
+    (.setCellFormula new-cell formula)))
+
+(defn set-hours-by-week-sums! [last-days-by-week]
+  (let [sum-fns (get-sum-fns (get-week-row-ranges last-days-by-week))]
+    (doall (map set-formula-on-new-cell! last-days-by-week sum-fns))))
+
+(defn apply-sums-by-week [orig-file new-file]
+  (let [workbook (load-workbook orig-file)
+        last-days-by-week (-> (read-timesheet workbook) get-last-days-by-week)]
+    (set-hours-by-week-sums! last-days-by-week)
+    (save-workbook! new-file workbook)))
