@@ -21,18 +21,18 @@
 (defn get-week-of-year [day-row]
   (.getWeekOfWeekyear (get-day-date day-row)))
 
-(defn select-last-day-of-week [day-rows]
-  (let [last-day (apply max (map get-day-of-week day-rows))]
-    (filter #(= last-day (get-day-of-week %)) day-rows)))
+(defn get-month-of-year [day-row]
+  (.getMonthOfYear (get-day-date day-row)))
 
-(defn partition-by-week [timesheet]
-  (partition-by
-   get-week-of-year
-   timesheet))
+(def partition-by-week 
+  (partial partition-by get-week-of-year))
+
+(def partition-by-month
+  (partial partition-by get-month-of-year))
 
 (defn get-last-days-by-week [timesheet]
   (->> (partition-by-week timesheet)
-   (mapcat select-last-day-of-week)))
+       (map last)))
 
 (defn calc-row-ranges [row-range-seq last-row]
   (let [first-row (if (seq row-range-seq) (inc (last row-range-seq)) 1)]
