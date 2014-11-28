@@ -15,9 +15,6 @@
 (defn get-day-date [day-row]
   (org.joda.time.LocalDate/fromDateFields (.getDateCellValue (first day-row))))
 
-(defn get-day-of-week [day-row]
-  (.getDayOfWeek (get-day-date day-row)))
-
 (defn get-week-of-year [day-row]
   (.getWeekOfWeekyear (get-day-date day-row)))
 
