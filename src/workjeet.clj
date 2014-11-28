@@ -46,11 +46,20 @@
 
 (defn set-formula-on-new-cell! [row formula]
   (let [new-cell (.createCell row (.getLastCellNum row))]
-    (.setCellFormula new-cell formula)))
+    (doto new-cell
+      (apply-date-format! "[h]:mm:ss")
+      (.setCellFormula formula))))
 
 (defn set-hours-by-week-sums! [last-days-by-week]
   (let [sum-fns (get-sum-fns (get-week-row-ranges last-days-by-week))]
     (doall (map set-formula-on-new-cell! last-days-by-week sum-fns))))
+
+(defn copy-row! [source-row target-sheet]
+  (let [target-row (.createRow target-sheet (.getLastRowNum target-sheet))]
+    (doseq [source-cell (cell-seq source-row)]
+      (let [cell-num (if (= -1 (.getLastCellNum target-row)) 0 (.getLastCellNum target-row))
+            target-cell (.createCell target-row (int cell-num))]
+        (set-cell! target-cell (read-cell source-cell))))))
 
 (defn apply-sums-by-week [orig-file new-file]
   (let [workbook (load-workbook orig-file)
