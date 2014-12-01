@@ -5,21 +5,24 @@
             [clojure.tools.trace :refer :all])
   (:import [org.apache.poi.ss.usermodel Cell]))
 
-(defmulti set-cell-no-fmt! (fn [^Cell cell val] (type val)))
+(defmulti read-raw-cell #(.getCellType ^Cell %))
+(defmethod read-raw-cell Cell/CELL_TYPE_BLANK     [_]     nil)
+(defmethod read-raw-cell Cell/CELL_TYPE_STRING    [^Cell cell]  (.getStringCellValue cell))
+(defmethod read-raw-cell Cell/CELL_TYPE_BOOLEAN   [^Cell cell]  (.getBooleanCellValue cell))
+(defmethod read-raw-cell Cell/CELL_TYPE_NUMERIC   [^Cell cell]  (.getNumericCellValue cell))
 
-(defmethod set-cell-no-fmt! String [^Cell cell val]
+(defmulti set-raw-cell! (fn [^Cell cell val] (type val)))
+
+(defmethod set-raw-cell! String [^Cell cell val]
   (.setCellValue cell ^String val))
 
-(defmethod set-cell-no-fmt! Number [^Cell cell val]
+(defmethod set-raw-cell! Number [^Cell cell val]
   (.setCellValue cell (double val)))
 
-(defmethod set-cell-no-fmt! Boolean [^Cell cell val]
+(defmethod set-raw-cell! Boolean [^Cell cell val]
   (.setCellValue cell ^Boolean val))
 
-(defmethod set-cell-no-fmt! java.util.Date [^Cell cell val]
-  (.setCellValue cell ^java.util.Date val))
-
-(defmethod set-cell-no-fmt! nil [^Cell cell val]
+(defmethod set-raw-cell! nil [^Cell cell val]
   (let [^String null nil]
       (.setCellValue cell null)))
 
@@ -31,6 +34,10 @@
         start (kw-to-int start-kw)
         end (kw-to-int end-kw)]
     (map (comp keyword str char) (range start (inc end)))))
+
+(defn get-header-row [workbook]
+  (let [sheet (first (sheet-seq workbook))]
+    (take 6 (map read-cell (first (row-seq sheet))))))
 
 (defn read-timesheet [workbook]
   (let [sheet (first (sheet-seq workbook))]
@@ -56,26 +63,31 @@
        (map last)))
 
 (defn calc-row-ranges [row-range-seq last-row]
-  (let [first-row (if (seq row-range-seq) (inc (last row-range-seq)) 0)]
-    (conj row-range-seq first-row last-row)))
+  (if (= 1 (count row-range-seq))
+    (conj row-range-seq last-row)
+    (let [first-row (inc (last row-range-seq))]
+      (conj row-range-seq first-row last-row))))
 
-(defn get-week-row-ranges [last-days-by-week]
+(defn get-week-row-ranges [first-row last-days-by-week]
   (->> (map #(.getRowNum %) last-days-by-week)
-       (reduce calc-row-ranges [])
+       (reduce calc-row-ranges [(.getRowNum first-row)])
        (map inc)
        (partition 2)))
 
 (defn get-sum-fns [week-row-ranges]
-  (map #(str "SUM" "(D" (str/join ":D" %) ")") week-row-ranges))
+  (cons (str "SUM(I3, D" (str/join ":D" (first week-row-ranges)) ")") 
+        (map #(str "SUM(D" (str/join ":D" %) ")") (rest week-row-ranges))))
 
 (defn set-formula-on-new-cell! [row formula]
-  (let [new-cell (.createCell row (int (.getLastCellNum row)))]
+  (let [week-cell (.createCell row (int (.getLastCellNum row)))
+        new-cell (.createCell row (int (.getLastCellNum row)))]
+    (set-cell! week-cell (str "KW " (get-week-of-year row)))
     (doto new-cell
       (apply-date-format! "[h]:mm:ss")
       (.setCellFormula formula))))
 
-(defn set-hours-by-week-sums! [last-days-by-week]
-  (let [sum-fns (get-sum-fns (get-week-row-ranges last-days-by-week))]
+(defn set-hours-by-week-sums! [first-row last-days-by-week]
+  (let [sum-fns (get-sum-fns (get-week-row-ranges first-row last-days-by-week))]
     (doall (map set-formula-on-new-cell! last-days-by-week sum-fns))))
 
 (defn clone-cell-style! [source-cell target-cell]
@@ -88,74 +100,38 @@
     (doseq [source-cell (cell-seq source-row)]
       (let [cell-num (if (= -1 (.getLastCellNum target-row)) 0 (.getLastCellNum target-row))
             target-cell (.createCell target-row (int cell-num))]
-        (set-cell-no-fmt! target-cell (read-cell source-cell))
+        (set-raw-cell! target-cell (read-raw-cell source-cell))
         (clone-cell-style! source-cell target-cell)))
     target-row))
 
 (defn copy-rows! [source-rows target-sheet]
   (doall (for [source-row source-rows] (copy-row! source-row target-sheet))))
 
-(defn make-workjeet! [parent-folder day-rows]
+(defn make-header [month-and-year header-row]
+  [["Mitarbeiter" "Andreas Wurzer"]
+   ["Monat" month-and-year]
+   header-row])
+
+(defn create-by-month-workbook [month-and-year header-row]
+  (let [workbook (create-xls-workbook month-and-year
+                                      (make-header month-and-year header-row))]
+    (doseq [header-row (row-seq (select-sheet month-and-year workbook))]
+      (set-row-style! header-row (create-cell-style! workbook {:font {:bold true}})))
+    workbook))
+
+(defn make-workjeet! [target-folder header-row day-rows]
   (let [first-day-date (-> (first day-rows) get-day-date)
         month-and-year (.print (date-formatter "MMMM yyyy") first-day-date)
-        by-month-workbook (create-xls-workbook month-and-year [])
-        new-day-rows (copy-rows! day-rows (first (sheet-seq by-month-workbook)))]
-    (set-hours-by-week-sums! (get-last-days-by-week new-day-rows))
-    (save-workbook! (.getAbsolutePath (io/file parent-folder (str month-and-year ".xls"))) by-month-workbook)))
+        by-month-workbook (create-by-month-workbook month-and-year header-row)
+        by-month-sheet (select-sheet month-and-year by-month-workbook)
+        new-day-rows (copy-rows! day-rows by-month-sheet)]
+    (set-hours-by-week-sums! (first new-day-rows) (get-last-days-by-week new-day-rows))
+    (doseq [column-idx (range 0 9)] (.autoSizeColumn by-month-sheet column-idx))
+    (save-workbook! (.getAbsolutePath (io/file target-folder (str month-and-year ".xls"))) by-month-workbook)))
 
-(defn make-workjeets! [orig-file]
+(defn make-workjeets! [orig-file target-folder]
   (let [workbook (load-workbook orig-file)
-        months (partition-by-month (read-timesheet workbook))
-        parent-folder (-> (io/file orig-file) .getParentFile)]
+        header-row (get-header-row workbook)
+        months (partition-by-month (read-timesheet workbook))]
     (doseq [month months]
-      (make-workjeet! parent-folder month))))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+      (make-workjeet! target-folder header-row month))))
