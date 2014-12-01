@@ -54,12 +54,19 @@
   (let [sum-fns (get-sum-fns (get-week-row-ranges last-days-by-week))]
     (doall (map set-formula-on-new-cell! last-days-by-week sum-fns))))
 
+(defn clone-cell-style! [source-cell target-cell]
+  (let [new-cell-style (-> target-cell .getSheet .getWorkbook .createCellStyle)]    
+    (.cloneStyleFrom new-cell-style (.getCellStyle source-cell))
+    (.setCellStyle target-cell new-cell-style)))
+
 (defn copy-row! [source-row target-sheet]
   (let [target-row (.createRow target-sheet (.getLastRowNum target-sheet))]
     (doseq [source-cell (cell-seq source-row)]
       (let [cell-num (if (= -1 (.getLastCellNum target-row)) 0 (.getLastCellNum target-row))
             target-cell (.createCell target-row (int cell-num))]
-        (set-cell! target-cell (read-cell source-cell))))))
+        (set-cell! target-cell (read-cell source-cell))
+        (clone-cell-style! source-cell target-cell)))
+    target-row))
 
 (defn apply-sums-by-week [orig-file new-file]
   (let [workbook (load-workbook orig-file)
