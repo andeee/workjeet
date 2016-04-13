@@ -75,7 +75,7 @@
        (partition 2)))
 
 (defn get-sum-fns [week-row-ranges]
-  (cons (str "SUM(I3, D" (str/join ":D" (first week-row-ranges)) ")") 
+  (cons (str "SUM(I3, D" (str/join ":D" (first week-row-ranges)) ")")
         (map #(str "SUM(D" (str/join ":D" %) ")") (rest week-row-ranges))))
 
 (defn set-formula-on-new-cell! [row formula]
@@ -112,6 +112,16 @@
    ["Monat" month-and-year]
    header-row])
 
+(defn apply-column-date-format! [column-idx pattern rows]
+  (doseq [row rows]
+    (let [cell (.getCell row column-idx)]
+      (apply-date-format! cell pattern))))
+
+(defn apply-formatting! [rows]
+  (apply-column-date-format! 0 "dd.MM.yyy" rows)
+  (apply-column-date-format! 1 "hh:mm" rows)
+  (apply-column-date-format! 2 "hh:mm" rows))
+
 (defn create-by-month-workbook [month-and-year header-row]
   (let [workbook (create-xls-workbook month-and-year
                                       (make-header month-and-year header-row))]
@@ -125,6 +135,7 @@
         by-month-workbook (create-by-month-workbook month-and-year header-row)
         by-month-sheet (select-sheet month-and-year by-month-workbook)
         new-day-rows (copy-rows! day-rows by-month-sheet)]
+    (apply-formatting! new-day-rows)
     (set-hours-by-week-sums! (first new-day-rows) (get-last-days-by-week new-day-rows))
     (doseq [column-idx (range 0 9)] (.autoSizeColumn by-month-sheet column-idx))
     (save-workbook! (.getAbsolutePath (io/file target-folder (str month-and-year ".xls"))) by-month-workbook)))
